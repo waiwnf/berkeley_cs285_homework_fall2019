@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-from .base_policy import BasePolicy
+from cs285.policies.base_policy import BasePolicy
 from cs285.infrastructure.tf_utils import build_mlp
 import tensorflow_probability as tfp
 
@@ -28,6 +28,7 @@ class MLPPolicy(BasePolicy):
         self.size = size
         self.learning_rate = learning_rate
         self.training = training
+        self.observations_pl = None
 
         # build TF graph
         with tf.variable_scope(policy_scope, reuse=tf.AUTO_REUSE):
@@ -87,7 +88,7 @@ class MLPPolicy(BasePolicy):
         # HINT1: you will need to call self.sess.run
         # HINT2: the tensor we're interested in evaluating is self.sample_ac
         # HINT3: in order to run self.sample_ac, it will need observation fed into the feed_dict
-        return TODO
+        return self.sess.run(self.sample_ac, feed_dict={self.observations_pl : observation})
 
     # update/train this policy
     def update(self, observations, actions):
@@ -121,10 +122,11 @@ class MLPPolicySL(MLPPolicy):
         # TODO define the loss that will be used to train this policy
         # HINT1: remember that we are doing supervised learning
         # HINT2: use tf.losses.mean_squared_error
-        self.loss = TODO
+        self.loss = tf.losses.mean_squared_error(true_actions, predicted_actions)
         self.train_op = tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
 
     def update(self, observations, actions):
         assert(self.training, 'Policy must be created with training=True in order to perform training updates...')
-        self.sess.run(self.train_op, feed_dict={self.observations_pl: observations, self.acs_labels_na: actions})
+        loss, _ = self.sess.run([self.loss, self.train_op], feed_dict={self.observations_pl: observations, self.acs_labels_na: actions})
+        return loss
 

@@ -1,3 +1,4 @@
+import random
 import time
 import numpy as np
 import tensorflow as tf
@@ -31,8 +32,7 @@ class ReplayBuffer(object):
     def add_rollouts(self, paths, concat_rew=True):
 
         # add new rollouts into our list of rollouts
-        for path in paths:
-            self.paths.append(path)
+        self.paths.extend(paths)
 
         # convert new rollouts into their component arrays, and append them onto our arrays
         observations, actions, rewards, next_observations, terminals = convert_listofrollouts(paths, concat_rew)
@@ -67,7 +67,8 @@ class ReplayBuffer(object):
         ## HINT 1: use np.random.permutation to sample random indices
         ## HINT 2: return corresponding data points from each array (i.e., not different indices from each array)
         ## HINT 3: look at the sample_recent_data function below
-        return TODO, TODO, TODO, TODO, TODO
+        indices = random.sample(range(self.obs.shape[0]), batch_size)
+        return self.obs[indices], self.acs[indices], self.rews[indices], self.next_obs[indices], self.terminals[indices]
 
     def sample_recent_data(self, batch_size=1):
         return self.obs[-batch_size:], self.acs[-batch_size:], self.rews[-batch_size:], self.next_obs[-batch_size:], self.terminals[-batch_size:]
