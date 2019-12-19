@@ -1,17 +1,12 @@
 import tensorflow as tf
-import os
-
-############################################
-############################################
 
 
-def build_mlp(input_placeholder, output_size, scope, n_layers, size, activation=tf.tanh, output_activation=None):
+def build_mlp(input_shape, output_size, n_layers, size, activation=tf.keras.activations.tanh, output_activation=None):
     """
         Builds a feedforward neural network
 
         arguments:
-            input_placeholder: placeholder variable for the state (batch_size, input_size)
-            scope: variable scope of the network
+            input_shape: input tensor shape
 
             n_layers: number of hidden layers
             size: dimension of each hidden layer
@@ -21,46 +16,31 @@ def build_mlp(input_placeholder, output_size, scope, n_layers, size, activation=
             output_activation: activation of the output layer
 
         returns:
-            output_placeholder: the result of a forward pass through the hidden layers + the output layer
+            Multi-level perceptron model.
     """
-    output_placeholder = input_placeholder
-    with tf.variable_scope(scope):
-        for _ in range(n_layers):
-             # HINT: use tf.layers.dense (specify <input>, <size>, activation=<?>)
-            output_placeholder = tf.layers.dense(output_placeholder, size, activation=activation)
-        # HINT: use tf.layers.dense (specify <input>, <size>, activation=<?>)
-        output_placeholder = tf.layers.dense(output_placeholder, output_size, activation=output_activation)
-    return output_placeholder
-
-
-############################################
-############################################
-
-
-def create_tf_session(use_gpu, gpu_frac=0.6, allow_gpu_growth=True, which_gpu=0):
-    if use_gpu:
-        # gpu options
-        gpu_options = tf.GPUOptions(
-            per_process_gpu_memory_fraction=gpu_frac,
-            allow_growth=allow_gpu_growth)
-        # TF config
-        config = tf.ConfigProto(
-            gpu_options=gpu_options,
-            log_device_placement=False,
-            allow_soft_placement=True,
-            inter_op_parallelism_threads=1,
-            intra_op_parallelism_threads=1)
-        # set env variable to specify which gpu to use
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(which_gpu)
+    if n_layers > 0:
+        layers = [tf.keras.layers.Dense(size, activation=activation, input_shape=input_shape, name='dense0')]
+        layers.extend(tf.keras.layers.Dense(size, activation=activation, name=f'dense{i}') for i in range(1, n_layers))
+        layers.append(tf.keras.layers.Dense(output_size, activation=output_activation, name='final'))
     else:
-        # TF config without gpu
-        config = tf.ConfigProto(device_count={'GPU': 0})
+        layers = [tf.keras.layers.Dense(output_size, activation=output_activation, input_shape=input_shape, name='final')]
+    return tf.keras.Sequential(layers, name='mlp')
 
-    # use config to create TF session
-    sess = tf.Session(config=config)
-    return sess
 
-def lrelu(x, leak=0.2):
-    f1 = 0.5 * (1 + leak)
-    f2 = 0.5 * (1 - leak)
-    return f1 * x + f2 * abs(x)
+def configure_tf_devices(use_gpu, gpu_memory_limit=1024, allow_gpu_growth=True, which_gpu=0):
+    if use_gpu:
+        all_gpus = tf.config.experimental.list_physical_devices('GPU')
+        active_gpu = all_gpus[which_gpu]
+        tf.config.experimental.set_visible_devices([active_gpu], 'GPU')
+        if allow_gpu_growth:
+            tf.config.experimental.set_memory_growth(active_gpu, True)
+        else:
+            tf.config.experimental.set_virtual_device_configuration(
+                active_gpu,
+                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=gpu_memory_limit)])
+        tf.config.set_soft_device_placement(True)
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+        tf.config.threading.set_intra_op_parallelism_threads(1)
+        tf.debugging.set_log_device_placement(False)
+    else:
+        tf.config.experimental.set_visible_devices([], 'GPU')

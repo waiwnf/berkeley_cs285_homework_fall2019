@@ -1,11 +1,9 @@
 import random
-import time
-import numpy as np
-import tensorflow as tf
-import gym
-import os
 
-from cs285.infrastructure.utils import *
+import numpy as np
+
+from cs285.infrastructure.utils import convert_listofrollouts
+
 
 class ReplayBuffer(object):
 

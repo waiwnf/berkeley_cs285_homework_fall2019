@@ -1,19 +1,25 @@
 import numpy as np
 import tensorflow as tf
-from .base_policy import BasePolicy
-import tensorflow_probability as tfp
+from cs285.policies.base_policy import BasePolicy
 import pickle
 
-class Loaded_Gaussian_Policy(BasePolicy):
-    def __init__(self, sess, filename, **kwargs):
-        super().__init__(**kwargs)
 
-        self.sess = sess
+class Loaded_Gaussian_Policy(BasePolicy):
+    def __init__(self, filename, **kwargs):
+        super().__init__()
 
         with open(filename, 'rb') as f:
             data = pickle.loads(f.read())
 
-        self.nonlin_type = data['nonlin_type']
+        nonlin_type = data['nonlin_type']
+        self.nonlin = None
+        if nonlin_type == 'lrelu':
+            self.nonlin = tf.keras.layers.LeakyReLU(alpha=.01)
+        elif nonlin_type == 'tanh':
+            self.nonlin = tf.tanh
+        else:
+            raise NotImplementedError(nonlin_type)
+
         policy_type = [k for k in data.keys() if k != 'nonlin_type'][0]
 
         assert policy_type == 'GaussianPolicy', 'Policy type {} not supported'.format(policy_type)
@@ -21,54 +27,43 @@ class Loaded_Gaussian_Policy(BasePolicy):
 
         assert set(self.policy_params.keys()) == {'logstdevs_1_Da', 'hidden', 'obsnorm', 'out'}
 
-        self.build_graph()
+        self._load_weights()
+
 
     ##################################
 
-    def build_graph(self):
-        self.define_placeholders()
-        self.define_forward_pass()
+    def _load_weights(self):
 
-    ##################################
-
-    def define_placeholders(self):
-        self.obs_bo = tf.placeholder(tf.float32, [None, None])
-
-    def define_forward_pass(self):
-
-        # Build the policy. First, observation normalization.
+        # Build the policy and load the weights. First, observation normalization.
         assert list(self.policy_params['obsnorm'].keys()) == ['Standardizer']
-        obsnorm_mean = self.policy_params['obsnorm']['Standardizer']['mean_1_D']
-        obsnorm_meansq = self.policy_params['obsnorm']['Standardizer']['meansq_1_D']
-        obsnorm_stdev = np.sqrt(np.maximum(0, obsnorm_meansq - np.square(obsnorm_mean)))
-        print('obs', obsnorm_mean.shape, obsnorm_stdev.shape)
-        normedobs_bo = (self.obs_bo - obsnorm_mean) / (obsnorm_stdev + 1e-6)
-        curr_activations_bd = normedobs_bo
+        self.obsnorm_mean = self.policy_params['obsnorm']['Standardizer']['mean_1_D'].astype(np.float32)
+        self.obsnorm_meansq = self.policy_params['obsnorm']['Standardizer']['meansq_1_D'].astype(np.float32)
+        self.obsnorm_stdev = np.sqrt(np.maximum(0, self.obsnorm_meansq - np.square(self.obsnorm_mean))).astype(np.float32)
+        print('obs', self.obsnorm_mean.shape, self.obsnorm_stdev.shape)
 
         # Hidden layers next
         assert list(self.policy_params['hidden'].keys()) == ['FeedforwardNet']
         layer_params = self.policy_params['hidden']['FeedforwardNet']
-        for layer_name in sorted(layer_params.keys()):
-            l = layer_params[layer_name]
-            W, b = self.read_layer(l)
-            curr_activations_bd = self.apply_nonlin(tf.matmul(curr_activations_bd, W) + b)
-
+        self.hidden_layers_weights = [
+            self.read_layer(layer_params[layer_name])
+            for layer_name in sorted(layer_params.keys())]
+        
         # Output layer
-        W, b = self.read_layer(self.policy_params['out'])
-        self.output_bo = tf.matmul(curr_activations_bd, W) + b
+        self.out_layer_weights = self.read_layer(self.policy_params['out'])
+
+    def call(self, obs, **kwargs):
+        curr_activations_bd = (obs - self.obsnorm_mean) / (self.obsnorm_stdev + 1e-6)
+
+        for W, b in self.hidden_layers_weights:
+            curr_activations_bd = self.nonlin(tf.linalg.matmul(curr_activations_bd, W) + b)
+
+        W, b = self.out_layer_weights
+        return tf.linalg.matmul(curr_activations_bd, W) + b
 
     def read_layer(self, l):
         assert list(l.keys()) == ['AffineLayer']
         assert sorted(l['AffineLayer'].keys()) == ['W', 'b']
         return l['AffineLayer']['W'].astype(np.float32), l['AffineLayer']['b'].astype(np.float32)
-
-    def apply_nonlin(self, x):
-        if self.nonlin_type == 'lrelu':
-            return lrelu(x, leak=.01)
-        elif self.nonlin_type == 'tanh':
-            return tf.tanh(x)
-        else:
-            raise NotImplementedError(self.nonlin_type)
 
     ##################################
 
@@ -82,5 +77,4 @@ class Loaded_Gaussian_Policy(BasePolicy):
             observation = obs
         else:
             observation = obs[None, :]
-        return self.sess.run(self.output_bo, feed_dict={self.obs_bo : observation})
-
+        return self.call(observation)

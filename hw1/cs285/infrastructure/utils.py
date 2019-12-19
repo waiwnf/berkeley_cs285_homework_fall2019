@@ -1,14 +1,14 @@
 import numpy as np
 import time
-import scipy
 
 ############################################
 ############################################
 
-def sample_trajectory(env, policy, max_path_length, render=False, render_mode=('rgb_array')):
+
+def sample_trajectory(env, policy, max_path_length, render=False, render_mode=('rgb_array',)):
 
     # initialize env for the beginning of a new rollout
-    observations = [env.reset()] # HINT: should be the output of resetting the env
+    observations = [env.reset().astype(np.float32)] # HINT: should be the output of resetting the env
 
     # init vars
     actions, rewards, terminals, image_obs = [], [], [], []
@@ -32,6 +32,7 @@ def sample_trajectory(env, policy, max_path_length, render=False, render_mode=('
 
         # take that action and record results
         observation, reward, env_done, _ = env.step(action)
+        observation = observation.astype(np.float32)
 
         # record result of taking that action
         observations.append(observation)
@@ -44,7 +45,8 @@ def sample_trajectory(env, policy, max_path_length, render=False, render_mode=('
 
     return Path(observations[:-1], image_obs, actions, rewards, observations[1:], terminals)
 
-def sample_trajectories(env, policy, min_timesteps_per_batch, max_path_length, render=False, render_mode=('rgb_array')):
+
+def sample_trajectories(env, policy, min_timesteps_per_batch, max_path_length, render=False, render_mode=('rgb_array',)):
     """
         Collect rollouts until we have collected min_timesteps_per_batch steps.
 
@@ -60,7 +62,8 @@ def sample_trajectories(env, policy, min_timesteps_per_batch, max_path_length, r
         timesteps_this_batch += get_pathlength(path)
     return paths, timesteps_this_batch
 
-def sample_n_trajectories(env, policy, ntraj, max_path_length, render=False, render_mode=('rgb_array')):
+
+def sample_n_trajectories(env, policy, ntraj, max_path_length, render=False, render_mode=('rgb_array',)):
     """
         Collect ntraj rollouts.
 
@@ -72,6 +75,7 @@ def sample_n_trajectories(env, policy, ntraj, max_path_length, render=False, ren
 
 ############################################
 ############################################
+
 
 def Path(obs, image_obs, acs, rewards, next_obs, terminals):
     """
@@ -106,6 +110,7 @@ def convert_listofrollouts(paths, concat_rew=True):
 
 ############################################
 ############################################
+
 
 def get_pathlength(path):
     return len(path["reward"])

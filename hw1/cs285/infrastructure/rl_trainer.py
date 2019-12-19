@@ -1,18 +1,16 @@
-import time
 from collections import OrderedDict
 import pickle
-import numpy as np
 import tensorflow as tf
 import gym
-import os
 
 from cs285.infrastructure.utils import *
-from cs285.infrastructure.tf_utils import create_tf_session
 from cs285.infrastructure.logger import Logger
+from cs285.infrastructure.tf_utils import configure_tf_devices
 
 # params for saving rollout videos to tensorboard
 MAX_NVIDEO = 2
 MAX_VIDEO_LEN = 120
+
 
 class RL_Trainer(object):
 
@@ -22,14 +20,14 @@ class RL_Trainer(object):
         ## INIT
         #############
 
-        # Get params, create logger, create TF session
+        # Get params, create logger, configure TF context.
         self.params = params
         self.logger = Logger(self.params['logdir'])
-        self.sess = create_tf_session(self.params['use_gpu'], which_gpu=self.params['which_gpu'])
+        # configure_tf_devices(use_gpu=self.params['use_gpu'], which_gpu=self.params['which_gpu'])
 
         # Set random seeds
         seed = self.params['seed']
-        tf.set_random_seed(seed)
+        tf.compat.v1.set_random_seed(seed)
         np.random.seed(seed)
 
         #############
@@ -64,15 +62,7 @@ class RL_Trainer(object):
         #############
 
         agent_class = self.params['agent_class']
-        self.agent = agent_class(self.sess, self.env, self.params['agent_params'])
-
-        #############
-        ## INIT VARS
-        #############
-
-        ## TODO initialize all of the TF variables (that were created by agent, etc.)
-        ## HINT: use global_variables_initializer
-        self.sess.run(tf.variables_initializer(tf.global_variables()))
+        self.agent = agent_class(self.env, self.params['agent_params'])
 
     def run_training_loop(self, n_iter, collect_policy, eval_policy,
                         initial_expertdata_path=None, relabel_with_expert=False,
@@ -81,7 +71,7 @@ class RL_Trainer(object):
         :param n_iter:  number of (dagger) iterations
         :param collect_policy:
         :param eval_policy:
-        :param initial_expertdata:
+        :param initial_expertdata_path:
         :param relabel_with_expert:  whether to perform dagger
         :param start_relabel_with_expert: iteration at which to start relabel with expert
         :param expert_policy:
@@ -123,7 +113,7 @@ class RL_Trainer(object):
 
                 # save policy
                 print('\nSaving agent\'s actor...')
-                self.agent.actor.save(self.params['logdir'] + '/policy_itr_'+str(itr))
+                self.agent.actor.save_layers(self.params['logdir'] + '/policy_itr_'+str(itr))
 
     ####################################
     ####################################
@@ -131,7 +121,7 @@ class RL_Trainer(object):
     def collect_training_trajectories(self, itr, initial_expertdata_path, collect_policy, batch_size):
         """
         :param itr:
-        :param load_initial_expertdata:  path to expert data pkl file
+        :param initial_expertdata_path:  path to expert data pkl file
         :param collect_policy:  the current policy using which we collect data
         :param batch_size:  the number of transitions we collect
         :return:
@@ -140,13 +130,11 @@ class RL_Trainer(object):
             train_video_paths: paths which also contain videos for visualization purposes
         """
 
-        # TODO decide whether to load training data or use
         # HINT: depending on if it's the first iteration or not,
-            # decide whether to either
-                # load the data. In this case you can directly return as follows
-                # ``` return loaded_paths, 0, None ```
-
-                # collect data, batch_size is the number of transitions you want to collect.
+        # decide whether to either
+        # load the data. In this case you can directly return as follows
+        # ``` return loaded_paths, 0, None ```
+        # collect data, batch_size is the number of transitions you want to collect.
         if itr == 0 and initial_expertdata_path is not None:
             with open(initial_expertdata_path, 'rb') as fin:
                 paths, envsteps_this_batch = pickle.load(fin), 0
@@ -155,8 +143,9 @@ class RL_Trainer(object):
             # HINT1: use sample_trajectories from utils
             # HINT2: you want each of these collected rollouts to be of length self.params['ep_len']
             print("\nCollecting data to be used for training...")
-            paths, envsteps_this_batch = sample_trajectories(
-                self.env, policy=collect_policy, min_timesteps_per_batch=batch_size, max_path_length=self.params['ep_len'])
+            paths, envsteps_this_batch = sample_trajectories(self.env, policy=collect_policy,
+                                                             min_timesteps_per_batch=batch_size,
+                                                             max_path_length=self.params['ep_len'])
 
         # collect more rollouts with the same policy, to be saved as videos in tensorboard
         # note: here, we collect MAX_NVIDEO rollouts, each of length MAX_VIDEO_LEN
@@ -168,22 +157,10 @@ class RL_Trainer(object):
 
         return paths, envsteps_this_batch, train_video_paths
 
-
     def train_agent(self):
         print('\nTraining agent using sampled data from replay buffer...')
-        loss = 0
-        for train_step in range(self.params['num_agent_train_steps_per_iter']):
-
-            # TODO sample some data from the data buffer
-            # HINT1: use the agent's sample function
-            # HINT2: how much data = self.params['train_batch_size']
-            ob_batch, ac_batch, re_batch, next_ob_batch, terminal_batch = self.agent.sample(self.params['train_batch_size'])
-
-            # TODO use the sampled data for training
-            # HINT: use the agent's train function
-            # HINT: print or plot the loss for debugging!
-            loss = self.agent.train(ob_batch, ac_batch, re_batch, next_ob_batch, terminal_batch)
-        print('Train loss: {!r}'.format(loss))
+        self.agent.train_multi_iter(batch_size=self.params['train_batch_size'],
+                                    num_iters=self.params['num_agent_train_steps_per_iter'])
 
     def do_relabel_with_expert(self, expert_policy, paths):
         print("\nRelabelling collected observations with labels from an expert policy...")
@@ -203,7 +180,9 @@ class RL_Trainer(object):
 
         # collect eval trajectories, for logging
         print("\nCollecting data for eval...")
-        eval_paths, eval_envsteps_this_batch = sample_trajectories(self.env, eval_policy, self.params['eval_batch_size'], self.params['ep_len'])
+        eval_paths, eval_envsteps_this_batch = sample_trajectories(self.env, eval_policy,
+                                                                   self.params['eval_batch_size'],
+                                                                   self.params['ep_len'])
 
         # save eval rollouts as videos in tensorboard event file
         if self.log_video and train_video_paths != None:
@@ -243,7 +222,6 @@ class RL_Trainer(object):
 
             logs["Train_EnvstepsSoFar"] = self.total_envsteps
             logs["TimeSinceStart"] = time.time() - self.start_time
-
 
             if itr == 0:
                 self.initial_return = np.mean(train_returns)

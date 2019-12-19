@@ -1,11 +1,11 @@
 import os
 import time
-import numpy as np
-import tensorflow as tf
 
 from cs285.infrastructure.rl_trainer import RL_Trainer
+from cs285.infrastructure.tf_utils import configure_tf_devices
 from cs285.agents.bc_agent import BCAgent
 from cs285.policies.loaded_gaussian_policy import Loaded_Gaussian_Policy
+
 
 class BC_Trainer(object):
 
@@ -37,7 +37,7 @@ class BC_Trainer(object):
         #######################
 
         print('Loading expert policy from...', self.params['expert_policy_file'])
-        self.loaded_expert_policy = Loaded_Gaussian_Policy(self.rl_trainer.sess, self.params['expert_policy_file'])
+        self.loaded_expert_policy = Loaded_Gaussian_Policy(self.params['expert_policy_file'])
         print('Done restoring expert policy...')
 
     def run_training_loop(self):
@@ -85,6 +85,8 @@ def main():
 
     # convert args to dictionary
     params = vars(args)
+
+    configure_tf_devices(use_gpu=params['use_gpu'], which_gpu=params['which_gpu'])
 
     ##################################
     ### CREATE DIRECTORY FOR LOGGING
