@@ -1,6 +1,5 @@
 from collections import OrderedDict
 import pickle
-import tensorflow as tf
 import gym
 
 from cs285.infrastructure.utils import *
@@ -27,7 +26,6 @@ class RL_Trainer(object):
 
         # Set random seeds
         seed = self.params['seed']
-        tf.compat.v1.set_random_seed(seed)
         np.random.seed(seed)
 
         #############
