@@ -1,3 +1,5 @@
+import random
+
 import tensorflow as tf
 import numpy as np
 
@@ -7,10 +9,9 @@ from cs285.critics.dqn_critic import DQNCritic
 
 
 class DQNAgent(object):
-    def __init__(self, sess, env, agent_params):
+    def __init__(self, env, agent_params, **kwargs):
 
         self.env = env
-        self.sess = sess
         self.agent_params = agent_params
         self.batch_size = agent_params['batch_size']
         self.last_obs = self.env.reset()
@@ -24,12 +25,11 @@ class DQNAgent(object):
         self.exploration = agent_params['exploration_schedule']
         self.optimizer_spec = agent_params['optimizer_spec']
 
-        self.critic = DQNCritic(sess, agent_params, self.optimizer_spec)
-        self.actor = ArgMaxPolicy(sess, self.critic)
+        self.critic = DQNCritic(agent_params, self.optimizer_spec)
+        self.actor = ArgMaxPolicy(self.critic)
 
-        lander = agent_params['env_name'] == 'LunarLander-v2'
-        self.replay_buffer = MemoryOptimizedReplayBuffer(
-            agent_params['replay_buffer_size'], agent_params['frame_history_len'], lander=lander)
+        # TODO pipe through the observation data type switch.
+        self.replay_buffer = MemoryOptimizedReplayBuffer(agent_params['replay_buffer_size'], agent_params['frame_history_len'])
         self.t = 0
         self.num_param_updates = 0
 
@@ -56,10 +56,10 @@ class DQNAgent(object):
         # HINT: take random action 
             # with probability eps (see np.random.random())
             # OR if your current step number (see self.t) is less that self.learning_starts
-        perform_random_action = TODO
+        perform_random_action = random.random() < eps
 
         if perform_random_action:
-            action = TODO
+            action = random.randrange(self.num_actions)
         else:
             # TODO query the policy to select action
             # HINT: you cannot use "self.last_obs" directly as input
@@ -70,18 +70,16 @@ class DQNAgent(object):
             # that you pushed into the buffer and compute the corresponding
             # input that should be given to a Q network by appending some
             # previous frames.
-            enc_last_obs = TODO
-            enc_last_obs = enc_last_obs[None, :]
+            enc_last_obs = self.replay_buffer.encode_recent_observation()[np.newaxis, ...]
 
             # TODO query the policy with enc_last_obs to select action
-            action = TODO
-            action = action[0]
+            action = self.actor.get_action(enc_last_obs)[0]
 
         # TODO take a step in the environment using the action from the policy
         # HINT1: remember that self.last_obs must always point to the newest/latest observation
         # HINT2: remember the following useful function that you've seen before:
             #obs, reward, done, info = env.step(action)
-        TODO
+        self.last_obs, reward, env_done, _ = self.env.step(action)
 
         # TODO store the result of taking this action into the replay buffer
         # HINT1: see replay buffer's store_effect function

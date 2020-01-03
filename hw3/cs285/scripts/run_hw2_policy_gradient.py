@@ -2,7 +2,9 @@ import os
 import time
 
 from cs285.infrastructure.rl_trainer import RL_Trainer
+from cs285.infrastructure.tf_utils import configure_tf_devices
 from cs285.agents.pg_agent import PGAgent
+
 
 class PG_Trainer(object):
 
@@ -85,6 +87,8 @@ def main():
 
     # convert to dictionary
     params = vars(args)
+
+    configure_tf_devices(use_gpu=params['use_gpu'], which_gpu=params['which_gpu'])
 
     # for policy gradient, we made a design decision
     # to force batch_size = train_batch_size

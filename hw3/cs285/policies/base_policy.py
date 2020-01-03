@@ -1,21 +1,16 @@
-import numpy as np
+import tensorflow as tf
 
-class BasePolicy(object):
 
-    def __init__(self, **kwargs):
-       super(BasePolicy, self).__init__(**kwargs)
-
-    def build_graph(self):
-        raise NotImplementedError
+class BasePolicy(tf.keras.Model):
 
     def get_action(self, obs):
-        raise NotImplementedError
+        raise NotImplementedError()
 
-    def update(self, obs, acs):
-        raise NotImplementedError
+    def get_log_prob(self, observations, actions):
+        raise NotImplementedError()
 
-    def save(self, filepath):
-    	raise NotImplementedError
+    def save_layers(self, filepath):
+        raise NotImplementedError()
 
-    def restore(self, filepath):
-    	raise NotImplementedError
+    def restore_layers(self, filepath):
+        raise NotImplementedError()

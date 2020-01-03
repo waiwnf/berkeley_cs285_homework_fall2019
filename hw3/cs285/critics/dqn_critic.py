@@ -4,9 +4,8 @@ from cs285.infrastructure.dqn_utils import minimize_and_clip, huber_loss
 
 class DQNCritic(BaseCritic):
 
-    def __init__(self, sess, hparams, optimizer_spec, **kwargs):
-        super().__init__(**kwargs)
-        self.sess = sess
+    def __init__(self, hparams, optimizer_spec, **kwargs):
+        super().__init__()
         self.env_name = hparams['env_name']
         self.ob_dim = hparams['ob_dim']
 
@@ -77,9 +76,9 @@ class DQNCritic(BaseCritic):
 
         # train_fn will be called in order to train the critic (by minimizing the TD error)
         self.learning_rate = tf.placeholder(tf.float32, (), name="learning_rate")
-        optimizer = self.optimizer_spec.constructor(learning_rate=self.learning_rate, **self.optimizer_spec.kwargs)
-        self.train_fn = minimize_and_clip(optimizer, self.total_error,
-                                          var_list=q_func_vars, clip_val=self.grad_norm_clipping)
+        optimizer = self.optimizer_spec.constructor(learning_rate=self.learning_rate, clip_norm=self.grad_norm_clipping, **self.optimizer_spec.kwargs)
+        # self.train_fn = minimize_and_clip(optimizer, self.total_error,
+        #                                   var_list=q_func_vars, clip_val=self.grad_norm_clipping)
 
         # update_target_fn will be called periodically to copy Q network to target Q network
         update_target_fn = []
