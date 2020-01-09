@@ -3,7 +3,7 @@ import random
 import tensorflow as tf
 import numpy as np
 
-from cs285.infrastructure.dqn_utils import MemoryOptimizedReplayBuffer, PiecewiseSchedule
+from cs285.infrastructure.dqn_utils import MemoryOptimizedReplayBuffer
 from cs285.policies.argmax_policy import ArgMaxPolicy
 from cs285.critics.dqn_critic import DQNCritic
 
@@ -15,21 +15,30 @@ class DQNAgent(object):
         self.agent_params = agent_params
         self.batch_size = agent_params['batch_size']
         self.last_obs = self.env.reset()
+        self.total_episode_reward = 0.0
+        self.total_episodes = []
+        self.episode_num = 0
 
         self.num_actions = agent_params['ac_dim']
         self.learning_starts = agent_params['learning_starts']
         self.learning_freq = agent_params['learning_freq']
         self.target_update_freq = agent_params['target_update_freq']
+        self.gamma = agent_params['gamma']
 
-        self.replay_buffer_idx = None
         self.exploration = agent_params['exploration_schedule']
         self.optimizer_spec = agent_params['optimizer_spec']
 
-        self.critic = DQNCritic(agent_params, self.optimizer_spec)
+        self.critic = DQNCritic(agent_params)
+        self.q_t_loss = tf.keras.losses.Huber()
+        self.q_t_optimizer = self.optimizer_spec.constructor(clipnorm=agent_params['grad_norm_clipping'],
+                                                             learning_rate=self.optimizer_spec.lr_schedule,
+                                                             **self.optimizer_spec.kwargs)
+
         self.actor = ArgMaxPolicy(self.critic)
 
-        # TODO pipe through the observation data type switch.
-        self.replay_buffer = MemoryOptimizedReplayBuffer(agent_params['replay_buffer_size'], agent_params['frame_history_len'])
+        self.replay_buffer = MemoryOptimizedReplayBuffer(agent_params['replay_buffer_size'],
+                                                         agent_params['frame_history_len'],
+                                                         obs_dtype=agent_params['obs_dtype'])
         self.t = 0
         self.num_param_updates = 0
 
@@ -47,15 +56,11 @@ class DQNAgent(object):
             Note that self.last_obs must always point to the new latest observation.
         """
 
-        # TODO store the latest observation into the replay buffer
-        # HINT: see replay buffer's function store_frame
-        self.replay_buffer_idx = TODO
-
-        eps = self.exploration.value(self.t)
+        eps = self.exploration(self.t)
         # TODO use epsilon greedy exploration when selecting action
         # HINT: take random action 
-            # with probability eps (see np.random.random())
-            # OR if your current step number (see self.t) is less that self.learning_starts
+        # with probability eps (see np.random.random())
+        # OR if your current step number (see self.t) is less that self.learning_starts
         perform_random_action = random.random() < eps
 
         if perform_random_action:
@@ -70,30 +75,34 @@ class DQNAgent(object):
             # that you pushed into the buffer and compute the corresponding
             # input that should be given to a Q network by appending some
             # previous frames.
-            enc_last_obs = self.replay_buffer.encode_recent_observation()[np.newaxis, ...]
+            enc_last_obs = self.replay_buffer.encode_next_frame_observation(self.last_obs)[np.newaxis, ...]
 
             # TODO query the policy with enc_last_obs to select action
-            action = self.actor.get_action(enc_last_obs)[0]
+            action = self.actor.get_action(enc_last_obs).numpy().item()
 
         # TODO take a step in the environment using the action from the policy
         # HINT1: remember that self.last_obs must always point to the newest/latest observation
         # HINT2: remember the following useful function that you've seen before:
-            #obs, reward, done, info = env.step(action)
+        # obs, reward, done, info = env.step(action)
+        prev_obs = self.last_obs
         self.last_obs, reward, env_done, _ = self.env.step(action)
+        self.total_episode_reward += reward
 
         # TODO store the result of taking this action into the replay buffer
         # HINT1: see replay buffer's store_effect function
         # HINT2: one of the arguments you'll need to pass in is self.replay_buffer_idx from above
-        TODO
+        self.replay_buffer.store_step(prev_obs, action, reward, env_done)
 
         # TODO if taking this step resulted in done, reset the env (and the latest observation)
-        TODO
+        if env_done:
+            self.episode_num += 1
+            print('Total episode {}: {}'.format(self.episode_num, self.total_episode_reward))
+            self.last_obs = self.env.reset()
+            self.total_episodes.append(self.total_episode_reward)
+            self.total_episode_reward = 0.0
 
     def sample(self, batch_size):
-        if self.replay_buffer.can_sample(self.batch_size):
-            return self.replay_buffer.sample(batch_size)
-        else:
-            return [],[],[],[],[]
+        return None, None, None, None, None
 
     def train(self, ob_no, ac_na, re_n, next_ob_no, terminal_n):
 
@@ -103,36 +112,34 @@ class DQNAgent(object):
         """
 
         loss = 0.0
-        if (self.t > self.learning_starts and \
-                self.t % self.learning_freq == 0 and \
-                self.replay_buffer.can_sample(self.batch_size)):
+        if ((self.t > self.learning_starts) and (self.t % self.learning_freq == 0) and (
+        self.replay_buffer.can_sample(self.batch_size))):
+            obs_batch, act_batch, rew_batch, next_obs_batch, done_mask = (
+                tf.convert_to_tensor(x) for x in self.replay_buffer.sample(self.batch_size))
+            next_state_target_q_a = self.critic.q_t_target(next_obs_batch)
 
-            # TODO populate all placeholders necessary for calculating the critic's total_error
-            # HINT: obs_t_ph, act_t_ph, rew_t_ph, obs_tp1_ph, done_mask_ph
-            feed_dict = {
-                self.critic.learning_rate: self.optimizer_spec.lr_schedule.value(self.t),
-                TODO,
-                TODO,
-                TODO,
-                TODO,
-                TODO,
-            }
+            with tf.GradientTape() as tape:
+                if self.critic.double_q:
+                    next_state_q_a = self.critic.q_t_model(next_obs_batch)
+                    next_actions = tf.argmax(next_state_q_a, axis=1)
+                else:
+                    next_actions = tf.argmax(next_state_target_q_a, axis=1)
+                next_state_actions_mask = tf.one_hot(next_actions, depth=self.num_actions)
+                q_target = rew_batch + self.gamma * tf.reduce_sum(
+                    next_state_target_q_a * next_state_actions_mask, axis=1) * (1.0 - done_mask)
+                q_target = tf.stop_gradient(q_target)
+                current_state_q_a = self.critic.q_t_model(obs_batch)
+                pred_q = tf.reduce_sum(current_state_q_a * tf.one_hot(act_batch, depth=self.num_actions), axis=1)
+                loss_value = self.q_t_loss(q_target, pred_q)
 
-            # TODO: create a LIST of tensors to run in order to 
-            # train the critic as well as get the resulting total_error
-            tensors_to_run = TODO
-            loss, _ = self.sess.run(tensors_to_run, feed_dict=feed_dict)
-            # Note: remember that the critic's total_error value is what you
-            # created to compute the Bellman error in a batch, 
-            # and the critic's train function performs a gradient step 
-            # and update the network parameters to reduce that total_error.
-
-            # TODO: use sess.run to periodically update the critic's target function
-            # HINT: see update_target_fn
-            if self.num_param_updates % self.target_update_freq == 0:
-                TODO
-
+            trainable_vars = self.critic.q_t_model.trainable_variables
+            grads = tape.gradient(loss_value, trainable_vars)
+            self.q_t_optimizer.apply_gradients(zip(grads, trainable_vars))
             self.num_param_updates += 1
+            loss = loss_value.numpy().item()
+
+            if self.num_param_updates % self.target_update_freq == 0:
+                self.critic.q_t_target.set_weights(self.critic.q_t_model.get_weights())
 
         self.t += 1
         return loss

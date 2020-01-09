@@ -28,6 +28,7 @@ def get_env_kwargs(env_name):
             'env_wrappers': wrap_deepmind,
             'frame_history_len': 4,
             'gamma': 0.99,
+            'obs_dtype': np.uint8,
             'optimizer_spec': atari_optimizer(pong_num_timesteps),
             'exploration_schedule': atari_exploration_schedule(pong_num_timesteps)
         },
@@ -42,7 +43,7 @@ def get_env_kwargs(env_name):
             'frame_history_len': 1,
             'target_update_freq': 3000,
             'grad_norm_clipping': 10,
-            'lander': True,
+            'obs_dtype': np.float32,
             'num_timesteps': lunar_lander_timesteps,
             'env_wrappers': lambda env: env,
             'exploration_schedule': lander_exploration_schedule(lunar_lander_timesteps),
@@ -79,7 +80,7 @@ def atari_model(obs_shape, num_actions, name):
                                      name='conv2'),
               tf.keras.layers.Flatten(),
               tf.keras.layers.Dense(512, activation=tf.keras.activations.relu, name='dense0'),
-              tf.keras.layers.Dense(num_actions, activation=tf.keras.activations.relu, name='dense1')]
+              tf.keras.layers.Dense(num_actions, name='dense1')]
     return IntImageModel(oracle=tf.keras.Sequential(layers, name=name))
 
 
@@ -137,13 +138,7 @@ def lander_exploration_schedule(num_timesteps):
     )
 
 
-class Schedule(object):
-    def value(self, t):
-        """Value of the schedule at time t"""
-        raise NotImplementedError()
-
-
-class ConstantSchedule(object):
+class ConstantSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, value):
         """Value remains constant over time.
         Parameters
@@ -153,7 +148,7 @@ class ConstantSchedule(object):
         """
         self._v = value
 
-    def value(self, t):
+    def __call__(self, t):
         """See Schedule.value"""
         return self._v
 
@@ -162,7 +157,7 @@ def linear_interpolation(l, r, alpha):
     return l + alpha * (r - l)
 
 
-class PiecewiseSchedule(object):
+class PiecewiseSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, endpoints, interpolation=linear_interpolation, outside_value=None):
         """Piecewise schedule.
         endpoints: [(int, int)]
@@ -187,7 +182,7 @@ class PiecewiseSchedule(object):
         self._outside_value = outside_value
         self._endpoints = endpoints
 
-    def value(self, t):
+    def __call__(self, t):
         """See Schedule.value"""
         for (l_t, l), (r_t, r) in zip(self._endpoints[:-1], self._endpoints[1:]):
             if l_t <= t < r_t:
@@ -199,7 +194,7 @@ class PiecewiseSchedule(object):
         return self._outside_value
 
 
-class LinearSchedule(object):
+class LinearSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, schedule_timesteps, final_p, initial_p=1.0):
         """Linear interpolation between initial_p and final_p over
         schedule_timesteps. After this many timesteps pass final_p is
@@ -218,7 +213,7 @@ class LinearSchedule(object):
         self.final_p = final_p
         self.initial_p = initial_p
 
-    def value(self, t):
+    def __call__(self, t):
         """See Schedule.value"""
         fraction = min(float(t) / self.schedule_timesteps, 1.0)
         return self.initial_p + fraction * (self.final_p - self.initial_p)
@@ -270,8 +265,8 @@ class MemoryOptimizedReplayBuffer(object):
         self.num_in_buffer = 0
 
         self.obs = None
-        self.action = np.zeros([self.size], dtype=np.int32) # action[i] is the action taken in state with obs[i]
-        self.reward = np.zeros([self.size], dtype=np.float32) # reward[i] is received after action[i]
+        self.action = np.zeros([self.size], dtype=np.int32)  # action[i] is the action taken in state with obs[i]
+        self.reward = np.zeros([self.size], dtype=np.float32)  # reward[i] is received after action[i]
         # Initialize all the terminal indicators to true so that we do not go past the
         # history length in sampling.
         # done[i] is whether the rollout has terminated after action[i]
@@ -279,16 +274,31 @@ class MemoryOptimizedReplayBuffer(object):
 
     def can_sample(self, batch_size):
         """Returns true if `batch_size` different transitions can be sampled from the buffer."""
-        return batch_size <= self.num_in_buffer
+        return batch_size < self.num_in_buffer
 
-    def _encode_sample(self, idxes):
-        obs_batch = np.stack([self._encode_observation(idx) for idx in idxes], axis=0)
-        act_batch = self.action[idxes, ...]
-        rew_batch = self.reward[idxes, ...]
-        next_obs_batch = np.concatenate([self._encode_observation(idx + 1) for idx in idxes], axis=0)
-        done_mask = self.done[idxes, ...]
+    def _get_time_sliced_frames_history(self, idx, history_len):
+        # Take the last frame_history_len frame indices, most recent to least recent order.
+        frame_indices_reversed = [i % self.size for i in range(idx, idx - history_len, -1)]
+        # Find the most recent done marker among the selected frame indices.
+        for k, frame_idx in enumerate(frame_indices_reversed[1:], start=1):
+            if self.done[frame_idx] != 0:
+                # Reached the "done" marker of a previous rollout. Cut off the frames history from this point.
+                frame_indices_reversed = frame_indices_reversed[:k]
+                break
+        frame_indices = list(reversed(frame_indices_reversed))
+        time_padding_length = history_len - len(frame_indices)
+        frames_history = self.obs[frame_indices, ...]
+        if time_padding_length > 0:
+            time_padding = np.zeros((time_padding_length,) + self.obs.shape[1:], dtype=self.obs.dtype)
+            frames_history = np.concatenate((time_padding, frames_history), axis=0)
+        return frames_history
 
-        return obs_batch, act_batch, rew_batch, next_obs_batch, done_mask
+    @staticmethod
+    def _frames_history_to_observation(frames_history):
+        new_axes_order = tuple(range(1, len(frames_history.shape) - 1)) + (0, len(frames_history.shape) - 1)
+        shape_new_axes_order = tuple(frames_history.shape[idx] for idx in new_axes_order)
+        new_shape = shape_new_axes_order[:-2] + (shape_new_axes_order[-2] * shape_new_axes_order[-1],)
+        return np.transpose(frames_history, axes=new_axes_order).reshape(new_shape)
 
     def sample(self, batch_size):
         """Sample `batch_size` different transitions.
@@ -324,43 +334,35 @@ class MemoryOptimizedReplayBuffer(object):
             Array of shape (batch_size,) and dtype np.float32
         """
         assert self.can_sample(batch_size)
+        # Subtract 1 from the buffer size to make sure we have a valid next observation for every step.
         idxes = random.sample(range(self.num_in_buffer - 1), k=batch_size)
-        return self._encode_sample(idxes)
 
-    def encode_recent_observation(self):
-        """Return the most recent `frame_history_len` frames.
+        obs_batch = np.stack([self._encode_observation(idx) for idx in idxes], axis=0)
+        act_batch = self.action[idxes, ...]
+        rew_batch = self.reward[idxes, ...]
 
-        Returns
-        -------
-        observation: np.array
-            Array of shape (img_h, img_w, img_c * frame_history_len)
-            and dtype np.uint8, where observation[:, :, i*img_c:(i+1)*img_c]
-            encodes frame at time `t - frame_history_len + i`
-        """
-        assert self.num_in_buffer > 0
-        return self._encode_observation((self.next_idx - 1) % self.size)
+        # TODO use a dummy zero observation if the current step ended with a terminal.
+        next_obs_batch = np.stack([self._encode_observation(idx + 1) for idx in idxes], axis=0)
+        done_mask = self.done[idxes, ...]
+
+        return obs_batch, act_batch, rew_batch, next_obs_batch, done_mask
+
+    def encode_next_frame_observation(self, frame):
+        prev_idx = (self.next_idx - 1) % self.size
+        if self.done[prev_idx]:
+            history_frames = np.zeros((self.frame_history_len - 1,) + self.obs.shape[1:], dtype=self.obs.dtype)
+        else:
+            history_frames = self._get_time_sliced_frames_history(prev_idx, self.frame_history_len - 1)
+        all_frames = np.concatenate([history_frames, frame[np.newaxis, ...]], axis=0)
+        return self._frames_history_to_observation(all_frames)
 
     def _encode_observation(self, idx):
-        # Take the last frame_history_len frame indices, most recent to least recent order.
-        frame_indices_reversed = [i % self.size for i in range(idx, idx - self.frame_history_len, -1)]
-        # Find the most recent done marker among the selected frame indices.
-        for k, frame_idx in enumerate(frame_indices_reversed[1:], start=1):
-            if self.done[frame_idx] != 0:
-                # Reached the "done" marker of a previous rollout. Cut off the frames history from this point.
-                frame_indices_reversed = frame_indices_reversed[:k]
-                break
-        frame_indices = list(reversed(frame_indices_reversed))
-        time_padding_length = self.frame_history_len - len(frame_indices)
-        frames_history = self.obs[frame_indices, ...]
-        if time_padding_length > 0:
-            time_padding = np.zeros((time_padding_length,) + self.obs.shape[1:], dtype=self.obs.dtype)
-            frames_history = np.concatenate((time_padding, frames_history), axis=0)
-        img_h, img_w = self.obs.shape[1], self.obs.shape[2]
-        # Concatenate the time steps and color channels into a single dimension per pixel.
-        return np.transpose(frames_history, axes=(1, 2, 0, 3)).reshape((img_h, img_w, -1))
+        # T x H x W x C
+        frames_history = self._get_time_sliced_frames_history(idx, self.frame_history_len)
+        return self._frames_history_to_observation(frames_history)
 
-    def store_frame(self, frame):
-        """Store a single frame in the buffer at the next available index, overwriting
+    def store_step(self, frame, action, reward, done):
+        """Store a single transition in the buffer at the next available index, overwriting
         old frames if necessary.
 
         Parameters
@@ -368,34 +370,6 @@ class MemoryOptimizedReplayBuffer(object):
         frame: np.array
             Array of shape (img_h, img_w, img_c) and dtype np.uint8
             the frame to be stored
-
-        Returns
-        -------
-        idx: int
-            Index at which the frame is stored. To be used for `store_effect` later.
-        """
-        if self.obs is None:
-            self.obs = np.empty([self.size] + list(frame.shape), dtype=self.obs_dtype)
-            self.action = np.empty([self.size], dtype=np.int32)
-            self.reward = np.empty([self.size], dtype=np.float32)
-        self.obs[self.next_idx, ...] = frame
-
-        ret = self.next_idx
-        self.next_idx = (self.next_idx + 1) % self.size
-        self.num_in_buffer = min(self.size, self.num_in_buffer + 1)
-
-        return ret
-
-    def store_effect(self, idx, action, reward, done):
-        """Store effects of action taken after observing frame stored
-        at index idx. The reason `store_frame` and `store_effect` is broken
-        up into two functions is so that one can call `encode_recent_observation`
-        in between.
-
-        Parameters
-        ---------
-        idx: int
-            Index in buffer of recently observed frame (returned by `store_frame`).
         action: int
             Action that was performed upon observing this frame.
         reward: float
@@ -403,6 +377,12 @@ class MemoryOptimizedReplayBuffer(object):
         done: bool
             True if episode was finished after performing that action.
         """
-        self.action[idx] = action
-        self.reward[idx] = reward
-        self.done[idx] = done
+        if self.obs is None:
+            self.obs = np.empty((self.size,) + frame.shape, dtype=self.obs_dtype)
+        self.obs[self.next_idx, ...] = frame
+        self.action[self.next_idx] = action
+        self.reward[self.next_idx] = reward
+        self.done[self.next_idx] = done
+
+        self.next_idx = (self.next_idx + 1) % self.size
+        self.num_in_buffer = min(self.size, self.num_in_buffer + 1)

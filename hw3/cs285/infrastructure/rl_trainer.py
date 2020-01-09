@@ -10,6 +10,8 @@ import gym
 import gym.wrappers
 import pybullet_envs
 
+from cs285.agents.dqn_agent import DQNAgent
+from cs285.infrastructure.dqn_utils import get_wrapper_by_name
 from cs285.infrastructure.utils import sample_n_trajectories, sample_trajectories
 from cs285.infrastructure.logger import Logger
 
@@ -99,47 +101,47 @@ class RL_Trainer(object):
         start_time = time.time()
 
         for itr in range(n_iter):
-            print("\n\n********** Iteration %i ************" % itr)
-
             # decide if videos should be rendered/logged at this iteration
             log_video = (itr % self.params['video_log_freq'] == 0) and (self.params['video_log_freq'] > 0)
             # decide if metrics should be logged
             log_metrics = (itr % self.params['scalar_log_freq'] == 0) and (self.params['scalar_log_freq'] > 0)
 
+            if log_metrics:
+                print("\n\n********** Iteration %i ************" % itr)
+
             # collect trajectories, to be used for training
-            # TODO restore for DQN
-            # if isinstance(self.agent, DQNAgent):
-            #     # only perform an env step and add to replay buffer for DQN
-            #     self.agent.step_env()
-            #     envsteps_this_batch = 1
-            #     train_video_paths = None
-            #     paths = None
-            # else:
-            paths, envsteps_this_batch, train_video_paths = self.collect_training_trajectories(
-                itr, initial_expertdata_path, collect_policy,
-                self.params['batch_size'], log_video=log_video)  ## TODO implement this function below
+            if isinstance(self.agent, DQNAgent):
+                # only perform an env step and add to replay buffer for DQN
+                self.agent.step_env()
+                envsteps_this_batch = 1
+                train_video_paths = None
+                paths = None
+            else:
+                paths, envsteps_this_batch, train_video_paths = self.collect_training_trajectories(
+                    itr, initial_expertdata_path, collect_policy,
+                    self.params['batch_size'], log_video=log_video)  ## TODO implement this function below
+                # relabel the collected obs with actions from a provided expert policy
+                if relabel_with_expert and itr >= start_relabel_with_expert:
+                    paths = self.do_relabel_with_expert(expert_policy, paths)  ## TODO implement this function below
+
+                # add collected data to replay buffer
+                self.agent.add_to_replay_buffer(paths)
+
             total_envsteps += envsteps_this_batch
 
-            # relabel the collected obs with actions from a provided expert policy
-            if relabel_with_expert and itr >= start_relabel_with_expert:
-                paths = self.do_relabel_with_expert(expert_policy, paths)  ## TODO implement this function below
-
-            # add collected data to replay buffer
-            self.agent.add_to_replay_buffer(paths)
-
             # train agent (using sampled data from replay buffer)
-            self.train_agent()  ## TODO implement this function below
+            self.train_agent(iter=itr)  ## TODO implement this function below
 
             # log/save
             if log_video or log_metrics:
                 # perform logging
                 print('\nBeginning logging procedure...')
                 # TODO restore
-                # if isinstance(self.agent, DQNAgent):
-                #     self.perform_dqn_logging()
-                # else:
-                self.perform_logging(itr, paths, eval_policy, train_video_paths, start_time=start_time,
-                                     total_envsteps=total_envsteps, log_metrics=log_metrics, log_video=log_video)
+                if isinstance(self.agent, DQNAgent):
+                    self.perform_dqn_logging(start_time=start_time)
+                else:
+                    self.perform_logging(itr, paths, eval_policy, train_video_paths, start_time=start_time,
+                                         total_envsteps=total_envsteps, log_metrics=log_metrics, log_video=log_video)
 
 
                 # save policy
@@ -192,8 +194,8 @@ class RL_Trainer(object):
 
         return paths, envsteps_this_batch, train_video_paths
 
-    def train_agent(self):
-        print('\nTraining agent using sampled data from replay buffer...')
+    def train_agent(self, iter=0):
+        # print('\nTraining agent using sampled data from replay buffer...')
         loss = 0
         for train_step in range(self.params['num_agent_train_steps_per_iter']):
             # TODO sample some data from the data buffer
@@ -206,7 +208,8 @@ class RL_Trainer(object):
             # HINT: use the agent's train function
             # HINT: print or plot the loss for debugging!
             loss = self.agent.train(ob_batch, ac_batch, re_batch, next_ob_batch, terminal_batch)
-        print('Train loss: {!r}'.format(loss))
+        # if iter % 1000 == 0:
+        #     print('Train loss: {!r}'.format(loss))
 
     def do_relabel_with_expert(self, expert_policy, paths):
         print("\nRelabelling collected observations with labels from an expert policy...")
@@ -221,37 +224,41 @@ class RL_Trainer(object):
 
     ####################################
     ####################################
-    # def perform_dqn_logging(self):
-    #     episode_rewards = get_wrapper_by_name(self.env, "Monitor").get_episode_rewards()
-    #     if len(episode_rewards) > 0:
-    #         self.mean_episode_reward = np.mean(episode_rewards[-100:])
-    #     if len(episode_rewards) > 100:
-    #         self.best_mean_episode_reward = max(self.best_mean_episode_reward, self.mean_episode_reward)
-    #
-    #     logs = OrderedDict()
-    #
-    #     logs["Train_EnvstepsSoFar"] = self.agent.t
-    #     print("Timestep %d" % (self.agent.t,))
-    #     if self.mean_episode_reward > -5000:
-    #         logs["Train_AverageReturn"] = np.mean(self.mean_episode_reward)
-    #     print("mean reward (100 episodes) %f" % self.mean_episode_reward)
-    #     if self.best_mean_episode_reward > -5000:
-    #         logs["Train_BestReturn"] = np.mean(self.best_mean_episode_reward)
-    #     print("best mean reward %f" % self.best_mean_episode_reward)
-    #
-    #     if self.start_time is not None:
-    #         time_since_start = (time.time() - self.start_time)
-    #         print("running time %f" % time_since_start)
-    #         logs["TimeSinceStart"] = time_since_start
-    #
-    #     sys.stdout.flush()
-    #
-    #     for key, value in logs.items():
-    #         print('{} : {}'.format(key, value))
-    #         self.logger.log_scalar(value, key, self.agent.t)
-    #     print('Done logging...\n\n')
-    #
-    #     self.logger.flush()
+    def perform_dqn_logging(self, start_time):
+        episode_rewards = get_wrapper_by_name(self.env, "Monitor").get_episode_rewards()
+        if len(episode_rewards) > 0:
+            self.mean_episode_reward = np.mean(episode_rewards[-100:])
+        if len(episode_rewards) > 100:
+            self.best_mean_episode_reward = max(self.best_mean_episode_reward, self.mean_episode_reward)
+
+        logs = OrderedDict()
+
+        print('Average episode reward: {}'.format(np.mean(self.agent.total_episodes).item()))
+        self.agent.total_episodes = []
+
+
+        logs["Train_EnvstepsSoFar"] = self.agent.t
+        print("Timestep %d" % (self.agent.t,))
+        if self.mean_episode_reward > -5000:
+            logs["Train_AverageReturn"] = np.mean(self.mean_episode_reward)
+        print("mean reward (100 episodes) %f" % self.mean_episode_reward)
+        if self.best_mean_episode_reward > -5000:
+            logs["Train_BestReturn"] = np.mean(self.best_mean_episode_reward)
+        print("best mean reward %f" % self.best_mean_episode_reward)
+
+        if start_time is not None:
+            time_since_start = (time.time() - start_time)
+            print("running time %f" % time_since_start)
+            logs["TimeSinceStart"] = time_since_start
+
+        sys.stdout.flush()
+
+        for key, value in logs.items():
+            print('{} : {}'.format(key, value))
+            self.logger.log_scalar(value, key, self.agent.t)
+        print('Done logging...\n\n')
+
+        self.logger.flush()
 
     def perform_logging(self, itr, paths, eval_policy, train_video_paths, start_time, total_envsteps, log_metrics,
                         log_video):
