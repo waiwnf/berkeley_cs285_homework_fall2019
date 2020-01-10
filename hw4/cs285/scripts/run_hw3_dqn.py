@@ -1,9 +1,11 @@
+import argparse
 import os
 import time
 
 from cs285.infrastructure.rl_trainer import RL_Trainer
 from cs285.agents.dqn_agent import DQNAgent
 from cs285.infrastructure.dqn_utils import get_env_kwargs
+from cs285.infrastructure.tf_utils import configure_tf_devices
 
 
 class Q_Trainer(object):
@@ -36,9 +38,8 @@ class Q_Trainer(object):
             eval_policy = self.rl_trainer.agent.actor,
             )
 
-def main():
 
-    import argparse
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name',  default='PongNoFrameskip-v4',
                         choices=('PongNoFrameskip-v4',
@@ -57,7 +58,7 @@ def main():
 
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--use_gpu', '-gpu', action='store_true')
-    parser.add_argument('--which_gpu', '-gpu_id', default=0)
+    parser.add_argument('--which_gpu', '-gpu_id', type=int, default=0)
     parser.add_argument('--scalar_log_freq', type=int, default=int(1e4))
 
     parser.add_argument('--save_params', action='store_true')
@@ -67,6 +68,9 @@ def main():
     # convert to dictionary
     params = vars(args)
     params['video_log_freq'] = -1 # This param is not used for DQN
+
+    configure_tf_devices(use_gpu=args.use_gpu, which_gpu=args.which_gpu, allow_gpu_growth=True)
+
     ##################################
     ### CREATE DIRECTORY FOR LOGGING
     ##################################

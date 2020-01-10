@@ -1,22 +1,13 @@
 import numpy as np
 
-from .base_policy import BasePolicy
+from cs285.policies.base_policy import BasePolicy
 
 
 class MPCPolicy(BasePolicy):
-
-    def __init__(self,
-        sess,
-        env,
-        ac_dim,
-        dyn_models,
-        horizon,
-        N,
-        **kwargs):
+    def __init__(self, env, ac_dim, dyn_models, horizon, N, **kwargs):
         super().__init__(**kwargs)
 
         # init vars
-        self.sess = sess
         self.env = env
         self.dyn_models = dyn_models
         self.horizon = horizon
@@ -34,7 +25,7 @@ class MPCPolicy(BasePolicy):
     def sample_action_sequences(self, num_sequences, horizon):
         # TODO(Q1) uniformly sample trajectories and return an array of
         # dimensions (num_sequences, horizon, self.ac_dim)
-        return random_action_sequences
+        return np.random.uniform(self.low, self.high, (num_sequences, horizon, self.ac_dim))
 
     def get_action(self, obs):
 
@@ -49,6 +40,9 @@ class MPCPolicy(BasePolicy):
         predicted_rewards_per_ens = []
 
         for model in self.dyn_models:
+            for step in range(self.horizon):
+                next_obs_normalized = model.get_prediction(obs, candidate_action_sequences)
+
             pass
             # TODO(Q2)
 

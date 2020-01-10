@@ -5,6 +5,9 @@ import time
 import numpy as np 
 import tensorflow as tf 
 
+import gym
+import pybullet_envs
+
 from cs285.infrastructure.rl_trainer import RL_Trainer
 from cs285.agents.ac_agent import ACAgent
 

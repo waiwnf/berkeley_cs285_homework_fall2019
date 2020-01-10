@@ -2,8 +2,17 @@ import numpy as np
 import mujoco_py
 from gym import utils
 from gym.envs.mujoco import mujoco_env
+import pybullet_envs.gym_locomotion_envs
 
-class HalfCheetahEnv(mujoco_env.MujocoEnv, utils.EzPickle):
+class HalfCheetahEnv(pybullet_envs.gym_locomotion_envs.HalfCheetahBulletEnv):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def get_reward(self, observations, actions):
+        return 0
+
+
+class HalfCheetahEnvMujoco(mujoco_env.MujocoEnv, utils.EzPickle):
 
     def __init__(self):
 

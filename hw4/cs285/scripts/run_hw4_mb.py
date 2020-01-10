@@ -88,7 +88,7 @@ def main():
     # HARDCODE EPISODE LENGTHS FOR THE ENVS USED IN THIS MB ASSIGNMENT
     if params['env_name']=='reacher-cs285-v0':
         params['ep_len']=200
-    if params['env_name']=='cheetah-cs285-v0':
+    if params['env_name']=='HalfCheetahBulletEnv-v0':
         params['ep_len']=500
     if params['env_name']=='obstacles-cs285-v0':
         params['ep_len']=100
