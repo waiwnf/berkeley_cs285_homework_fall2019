@@ -39,3 +39,17 @@ class FFModel(tf.keras.Model):
         prediction_normalized = self.call([observations_norm, actions_norm])
         prediction = unnormalize(prediction_normalized, data_stats.obs_mean, data_stats.obs_std)
         return prediction
+
+
+class RewardModel(tf.keras.Model):
+    def __init__(self, ac_dim, ob_dim, n_layers, size, name='reward'):
+        super().__init__()
+        self.reward_model = build_mlp(input_shape=(ac_dim + ob_dim,), output_size=1, n_layers=n_layers, size=size, name=os.path.join(name, 'reward_model'))
+
+    #############################
+
+    # Predicts normalized state transitions
+    def call(self, inputs, training=None, mask=None):
+        obs, acs = inputs
+        concatenated_input = tf.concat([obs, acs], axis=1)
+        return self.reward_model(concatenated_input)

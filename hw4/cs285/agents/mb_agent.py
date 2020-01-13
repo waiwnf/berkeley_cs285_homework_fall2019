@@ -4,9 +4,13 @@ import numpy as np
 import tensorflow as tf
 
 from cs285.agents.base_agent import BaseAgent
-from cs285.models.ff_model import FFModel
+from cs285.models.ff_model import FFModel, RewardModel
 from cs285.policies.MPC_policy import MPCPolicy
 from cs285.infrastructure.replay_buffer import ReplayBuffer
+from cs285.infrastructure.tf_utils import build_mlp
+from cs285.infrastructure.utils import normalize
+
+import time
 
 
 DataStats = namedtuple('DataStats', ['obs_mean', 'obs_std', 'acs_mean', 'acs_std', 'delta_mean', 'delta_std'])
@@ -29,16 +33,52 @@ class MBAgent(BaseAgent):
         self.dyn_optimizers = [tf.keras.optimizers.Adam(learning_rate=self.agent_params['learning_rate'])
                                for _ in range(self.ensemble_size)]
         for model, optimizer in zip(self.dyn_models, self.dyn_optimizers):
-            model.transition_model.compile(optimizer, self.dyn_loss)
+            model.compile(optimizer, self.dyn_loss)
+
+        self.reward_models = [
+            RewardModel(agent_params['ac_dim'], agent_params['ob_dim'], agent_params['n_layers'],
+                        agent_params['size'], name='reward_model_{}'.format(i))
+            for i in range(self.ensemble_size)]
+        self.reward_loss = tf.keras.losses.MeanSquaredError()
+        self.reward_optimizers = [tf.keras.optimizers.Adam(learning_rate=self.agent_params['learning_rate'])
+                                  for _ in range(self.ensemble_size)]
+        for model, optimizer in zip(self.reward_models, self.reward_optimizers):
+            model.compile(optimizer, self.reward_loss)
 
         self.actor = MPCPolicy(self.env,
                                ac_dim=self.agent_params['ac_dim'],
                                dyn_models=self.dyn_models,
+                               reward_models=self.reward_models,
                                horizon=self.agent_params['mpc_horizon'],
                                N=self.agent_params['mpc_num_action_sequences'])
 
         self.replay_buffer = ReplayBuffer()
         self.data_stats = None
+
+    def train_multi_iter(self, batch_size, num_iters):
+        obs_norm = normalize(self.replay_buffer.obs, self.data_stats.obs_mean, self.data_stats.obs_std)
+        next_obs_norm = normalize(self.replay_buffer.next_obs, self.data_stats.obs_mean, self.data_stats.obs_std)
+        acs_norm = normalize(self.replay_buffer.acs, self.data_stats.acs_mean, self.data_stats.acs_std)
+
+        transition_dataset = tf.data.Dataset.from_tensor_slices(((obs_norm, acs_norm), next_obs_norm))
+        transition_dataset = transition_dataset.shuffle(obs_norm.shape[0]).batch(batch_size=batch_size, drop_remainder=True).repeat()
+        histories = []
+        for i, model in enumerate(self.dyn_models):
+            history = model.fit(transition_dataset, epochs=num_iters, steps_per_epoch=1, verbose=0)
+            histories.append(history)
+
+        avg_loss = np.mean([h.history['loss'] for h in histories], axis=0)
+
+        reward_dataset = tf.data.Dataset.from_tensor_slices(((obs_norm, acs_norm), self.replay_buffer.concatenated_rews[:, np.newaxis]))
+        reward_dataset = reward_dataset.shuffle(obs_norm.shape[0]).batch(batch_size=batch_size, drop_remainder=True).repeat()
+        reward_histories = []
+        for i, model in enumerate(self.reward_models):
+            history = model.fit(reward_dataset, epochs=num_iters, steps_per_epoch=1, verbose=0)
+            reward_histories.append(history)
+
+        avg_reward_loss = np.mean([h.history['loss'] for h in reward_histories], axis=0)
+
+        return avg_loss.tolist(), avg_reward_loss.tolist()
 
     def train(self, ob_no, ac_na, re_n, next_ob_no, terminal_n):
         # training a MB agent refers to updating the predictive model using observed state transitions
@@ -53,16 +93,16 @@ class MBAgent(BaseAgent):
             data_start_idx = i * num_data_per_ens
             data_end_idx = data_start_idx + num_data_per_ens
 
-            observations = ob_no[data_start_idx:data_end_idx, ...]  # TODO(Q1)
-            actions = ac_na[data_start_idx:data_end_idx, ...]  # TODO(Q1)
-            next_observations = next_ob_no[data_start_idx:data_end_idx, ...]  # TODO(Q1)
+            observations = normalize(ob_no[data_start_idx:data_end_idx, ...], self.data_stats.obs_mean, self.data_stats.obs_std)  # TODO(Q1)
+            actions = normalize(ac_na[data_start_idx:data_end_idx, ...], self.data_stats.acs_mean, self.data_stats.acs_std)  # TODO(Q1)
+            next_observations = normalize(next_ob_no[data_start_idx:data_end_idx, ...], self.data_stats.obs_mean, self.data_stats.obs_std)  # TODO(Q1)
 
             # use datapoints to update one of the dyn_models
             model = self.dyn_models[i]  # TODO(Q1)
             optimizer = self.dyn_optimizers[i]
 
             with tf.GradientTape() as tape:
-                predicted_next_observations = model.get_prediction(observations, actions, self.data_stats)
+                predicted_next_observations = model([observations, actions])
                 loss_tensor = self.dyn_loss(next_observations, predicted_next_observations)
 
             trainable_vars = model.transition_model.trainable_variables
@@ -86,6 +126,7 @@ class MBAgent(BaseAgent):
             acs_std=np.std(self.replay_buffer.acs, axis=0),
             delta_mean=np.mean(self.replay_buffer.next_obs - self.replay_buffer.obs, axis=0),
             delta_std=np.std(self.replay_buffer.next_obs - self.replay_buffer.obs, axis=0))
+        self.actor.data_statistics = self.data_stats
 
     def sample(self, batch_size):
         # NOTE: The size of the batch returned here is sampling batch_size * ensemble_size,

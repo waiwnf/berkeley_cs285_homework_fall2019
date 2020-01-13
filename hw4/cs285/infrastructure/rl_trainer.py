@@ -139,10 +139,12 @@ class RL_Trainer(object):
             self.agent.add_to_replay_buffer(paths, add_sl_noise=self.params['add_sl_noise'])
 
             # train agent (using sampled data from replay buffer)
-            all_losses = self.train_agent(iter=itr)
+            # all_losses = self.train_agent(iter=itr)
+            all_losses, all_reward_losses = self.agent.train_multi_iter(
+                self.params['train_batch_size'], self.params['num_agent_train_steps_per_iter'])
 
             if self.params['logdir'].split('/')[-1][:2] == 'mb' and itr==0:
-                self.log_model_predictions(itr, all_losses)
+                self.log_model_predictions(itr, all_losses, all_reward_losses)
 
             # log/save
             if log_video or log_metrics:
@@ -153,7 +155,7 @@ class RL_Trainer(object):
                 else:
                     self.perform_logging(itr, paths, eval_policy, train_video_paths, start_time=start_time,
                                          total_envsteps=total_envsteps, log_metrics=log_metrics, log_video=log_video,
-                                         all_losses=all_losses)
+                                         all_losses=all_losses, all_reward_losses=all_reward_losses)
 
 
                 # save policy
@@ -211,15 +213,15 @@ class RL_Trainer(object):
         # print('\nTraining agent using sampled data from replay buffer...')
         all_losses = []
         for train_step in range(self.params['num_agent_train_steps_per_iter']):
-            t1 = time.time()
+            # t1 = time.time()
             # TODO sample some data from the data buffer
             # HINT1: use the agent's sample function
             # HINT2: how much data = self.params['train_batch_size']
             (ob_batch, ac_batch, re_batch, next_ob_batch, terminal_batch) = self.agent.sample(
                 self.params['train_batch_size'])
 
-            t2 = time.time()
-            print('Sample {}'.format(t2-t1))
+            # t2 = time.time()
+            # print('Sample {}'.format(t2-t1))
 
             # TODO use the sampled data for training
             # HINT: use the agent's train function
@@ -227,8 +229,8 @@ class RL_Trainer(object):
             loss = self.agent.train(ob_batch, ac_batch, re_batch, next_ob_batch, terminal_batch)
             all_losses.append(loss)
 
-            t3 = time.time()
-            print('Train {}'.format(t3-t2))
+            # t3 = time.time()
+            # print('Train {}'.format(t3-t2))
 
         return all_losses
 
@@ -282,7 +284,7 @@ class RL_Trainer(object):
         self.logger.flush()
 
     def perform_logging(self, itr, paths, eval_policy, train_video_paths, start_time, total_envsteps, log_metrics,
-                        log_video, all_losses):
+                        log_video, all_losses, all_reward_losses):
 
         loss = all_losses[-1]
 
@@ -345,7 +347,7 @@ class RL_Trainer(object):
 
             self.logger.flush()
 
-    def log_model_predictions(self, itr, all_losses):
+    def log_model_predictions(self, itr, all_losses, all_reward_losses):
         # model predictions
 
         import matplotlib.pyplot as plt
@@ -378,3 +380,7 @@ class RL_Trainer(object):
         self.fig.clf()
         plt.plot(all_losses)
         self.fig.savefig(self.params['logdir']+'/itr_'+str(itr)+'_losses.png', dpi=200, bbox_inches='tight')
+
+        self.fig.clf()
+        plt.plot(all_reward_losses)
+        self.fig.savefig(self.params['logdir']+'/itr_'+str(itr)+'_reward_losses.png', dpi=200, bbox_inches='tight')

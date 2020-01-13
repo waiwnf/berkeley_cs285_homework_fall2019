@@ -3,6 +3,7 @@ import time
 
 from cs285.infrastructure.rl_trainer import RL_Trainer
 from cs285.agents.mb_agent import MBAgent
+from cs285.infrastructure.tf_utils import configure_tf_devices
 
 
 class MB_Trainer(object):
@@ -84,6 +85,8 @@ def main():
 
     # convert to dictionary
     params = vars(args)
+
+    configure_tf_devices(use_gpu=args.use_gpu, which_gpu=args.which_gpu, allow_gpu_growth=True)
 
     # HARDCODE EPISODE LENGTHS FOR THE ENVS USED IN THIS MB ASSIGNMENT
     if params['env_name']=='reacher-cs285-v0':
